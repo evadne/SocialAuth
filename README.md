@@ -20,10 +20,10 @@ Use `SAAccountStore`. Request an arbitrary account by calling `-requestAccountTy
 ## Behavior Matrix
 
 Access State | No Accounts | One Account | Many Accounts
-- | - | - | -
+------------ | ----------- | ----------- | -------------
 Never Granted or Denied | Bails on Settings | Asks for Permission | Asks for Permission
-Explicitly Granted      | Bails on Settings | Succeeds with Account | Presents Picker
-Explicitly Denied       | Propagates Error | Propagates Error | Propagates Error
+Explicitly Granted | Bails on Settings | Succeeds with Account | Presents Picker
+Explicitly Denied | Propagates Error | Propagates Error | Propagates Error
 
 * **Bails on Settings:** SocialAuth will present an UIAlertView asking the customer to go sign in thru Settings.app. SocialAuth *does not* invoke the callback in this case.
 * **Asks for Permission:** SocialAuth will trigger a permission dialog and ask the customer for permission. After the permission is explicitly granted or denied, SocialAuth’s behavior follows the columns belonging to either *Explicitly Granted* or *Explicitly Denied* in the matrix.
