@@ -1,6 +1,19 @@
 #import "SAAccountStore.h"
 #import "UIActionSheet+SABlockRegistry.h"
 
+@interface SAComposeViewController : SLComposeViewController
++ (instancetype) composeViewControllerForServiceType:(NSString *)serviceType;
+@end
+
+@implementation SAComposeViewController
++ (instancetype) composeViewControllerForServiceType:(NSString *)serviceType {
+	return (SAComposeViewController *)[super composeViewControllerForServiceType:serviceType];
+}
+- (void) loadView {
+	self.view = [[UIView alloc] initWithFrame:CGRectZero];
+}
+@end
+
 @implementation SAAccountStore
 
 + (UIViewController *) persistentViewController {
@@ -28,10 +41,25 @@
 			ACAccountTypeIdentifierSinaWeibo: SLServiceTypeSinaWeibo
 		}[accountType.identifier];
 		
-		SLComposeViewController *composeViewController = [SLComposeViewController composeViewControllerForServiceType:serviceType];
-		[[[self class] persistentViewController] presentViewController:composeViewController animated:NO completion:^{
-			[composeViewController dismissViewControllerAnimated:NO completion:nil];
-		}];
+		UIViewController *persistentViewController = [[self class] persistentViewController];
+		SAComposeViewController *composeViewController = [SAComposeViewController composeViewControllerForServiceType:serviceType];
+		
+		void (^splunk)(void) = ^ {
+			for (UIView *view in persistentViewController.view.window.subviews) {
+				if ([view isKindOfClass:[UIImageView class]]) {
+					if ([view.layer.animationKeys count]) {
+						[view.layer removeAllAnimations];
+						view.alpha = 0;
+					}
+				}
+			}
+			composeViewController.view.alpha = 0;
+		};
+
+		[persistentViewController dismissViewControllerAnimated:NO completion:nil];
+		[persistentViewController presentViewController:composeViewController animated:NO completion:splunk];
+		[persistentViewController.view.window endEditing:NO];
+		splunk();
 		
 	};
 	
@@ -40,7 +68,7 @@
 		static const void * kActionSheetKeepAlive = &kActionSheetKeepAlive;
 		if (objc_getAssociatedObject(self, kActionSheetKeepAlive))
 			return;	//	already selecting - callback from the previous interaction session will fire.
-						
+		
 		UIActionSheet *actionSheet = [[UIActionSheet alloc] initWithTitle:@"Please choose an account." delegate:(id<UIActionSheetDelegate>)self cancelButtonTitle:nil destructiveButtonTitle:nil otherButtonTitles:nil];
 		
 		for (ACAccount *account in accounts) {
@@ -73,7 +101,7 @@
 		}
 	};
 	
-	if (accountType.accessGranted) {
+	if (accountType.accessGranted && [self accountsWithAccountType:accountType].count) {
 		//	If access is granted, do not do a queue roundtrip.
 		//	Proceed directly to the selector.
 		processAccounts();
@@ -82,6 +110,8 @@
 	
 	[self requestAccessToAccountsWithType:accountType options:options completion:^(BOOL granted, NSError *error) {
 		dispatch_async(dispatch_get_main_queue(), ^{
+			UIViewController *persistentViewController = [[self class] persistentViewController];
+			[persistentViewController dismissViewControllerAnimated:NO completion:nil];
 			if (granted) {
 				processAccounts();
 			} else if (error.code == ACErrorAccountNotFound) {
