@@ -10,4 +10,5 @@ Pod::Spec.new do |s|
   s.exclude_files = 'SocialAuth/Exclude'
   s.frameworks = 'Accounts', 'Social', 'QuartzCore'
   s.requires_arc = true
+  s.dependency 'OAuthCore'
 end
