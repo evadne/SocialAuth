@@ -1,4 +1,9 @@
+#import <OAuthCore/OAuthCore.h>
+#import <Social/Social.h>
+#import <QuartzCore/QuartzCore.h>
 #import "SAAccountStore.h"
+#import "SAError.h"
+#import "SAUtilities.h"
 #import "UIActionSheet+SABlockRegistry.h"
 
 @interface SAComposeViewController : SLComposeViewController
@@ -101,12 +106,8 @@
 		}
 	};
 	
-	if (accountType.accessGranted && [self accountsWithAccountType:accountType].count) {
-		//	If access is granted, do not do a queue roundtrip.
-		//	Proceed directly to the selector.
-		processAccounts();
-		return;
-	}
+	//	Always request access.
+	//	Do not skimp. Facebook hates that.
 	
 	[self requestAccessToAccountsWithType:accountType options:options completion:^(BOOL granted, NSError *error) {
 		dispatch_async(dispatch_get_main_queue(), ^{
@@ -130,4 +131,113 @@
 	
 }
 
+- (void) retrieveCredentialsForAccount:(ACAccount *)account withOptions:(NSDictionary *)options completion:(void(^)(BOOL didFinish, NSDictionary *credentials, NSError *error))block {
+
+	NSCParameterAssert(account);
+	NSCParameterAssert(block);
+
+	NSString *typeIdentifier = account.accountType.identifier;
+	
+	if ([typeIdentifier isEqualToString:ACAccountTypeIdentifierTwitter]) {
+		
+		//	Use Reverse Auth. https://dev.twitter.com/docs/ios/using-reverse-auth
+		//	We’re not doing anything fancy here except fixing a bug
+		//	that Twitter sneakily fixed in OAuthCore
+		
+		NSString *consumerKey = options[SATwitterConsumerKey];
+		NSString *consumerSecret = options[SATwitterConsumerSecret];
+		NSCParameterAssert(consumerKey && consumerSecret);
+		
+		NSURLRequest *tokenRequest = ((^{
+			NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://api.twitter.com/oauth/request_token"]];
+			[request setHTTPMethod:@"POST"];
+			[request setHTTPBody:[@"x_auth_mode=reverse_auth&" dataUsingEncoding:NSUTF8StringEncoding]];
+			[request setValue:OAuthorizationHeader(request.URL, request.HTTPMethod, request.HTTPBody, consumerKey, consumerSecret, nil, nil) forHTTPHeaderField:@"Authorization"];
+			[request setCachePolicy:NSURLRequestReloadIgnoringLocalAndRemoteCacheData];
+			[request setHTTPShouldHandleCookies:NO];
+			return request;
+		})());
+		
+		[NSURLConnection sendAsynchronousRequest:tokenRequest queue:[NSOperationQueue mainQueue] completionHandler:^(NSURLResponse *response, NSData *data, NSError *error) {
+			
+			if (error || !data) {
+				block(NO, nil, [NSError errorWithDomain:SAErrorDomain code:SAErrorHaltAndCatchFire userInfo:@{
+					NSLocalizedDescriptionKey: @"Reverse Auth Failure",
+					NSLocalizedFailureReasonErrorKey: [NSString stringWithFormat:@"%@ could not trigger Twitter Reverse Auth for account %@ with type %@. %@", NSStringFromClass([self class]), account, account.accountType.accountTypeDescription, [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]]
+				}]);
+				return;
+			}
+			
+			SLRequest *reauthRequest = [SLRequest requestForServiceType:SLServiceTypeTwitter requestMethod:SLRequestMethodPOST URL:[NSURL URLWithString:@"https://api.twitter.com/oauth/access_token"] parameters:@{
+				@"x_reverse_auth_target": consumerKey,
+				@"x_reverse_auth_parameters": [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]
+			}];
+			
+			[reauthRequest setAccount:account];
+			[reauthRequest performRequestWithHandler:^(NSData *responseData, NSHTTPURLResponse *urlResponse, NSError *error) {
+				NSDictionary *answer = SAQueryParameters([[NSString alloc] initWithData:responseData encoding:NSUTF8StringEncoding]);
+				NSString *token = answer[@"oauth_token"];
+				NSString *secret = answer[@"oauth_token_secret"];
+				if (token && secret) {
+					block(YES, @{
+						SATwitterAccessToken: token,
+						SATwitterAccessTokenSecret: secret
+					}, nil);
+				} else {
+					block(NO, nil, [NSError errorWithDomain:SAErrorDomain code:SAErrorHaltAndCatchFire userInfo:@{
+						NSLocalizedDescriptionKey: @"Reverse Auth Uncertainty",
+						NSLocalizedFailureReasonErrorKey: [NSString stringWithFormat:@"%@ could not confidently finish Twitter Reverse Auth for account %@ with type %@. %@", NSStringFromClass([self class]), account, account.accountType.accountTypeDescription, [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]]
+					}]);
+				}
+			}];
+
+		}];
+		
+		return;
+		
+	}
+	
+	if ([typeIdentifier isEqualToString:ACAccountTypeIdentifierFacebook]) {
+		
+		//	Facebook is using oAuth 2.0 which signs requests on a query parameter over HTTPS.
+		//	We can extract this from the public API contract.
+		
+		//	Note that the official Facebook SDK actually accesses ACAccount.credentials which runs against Apple’s admonitions (https://github.com/facebook/facebook-ios-sdk/blob/4778430b98574e4919d0a24c367f340029c97e6a/src/FBSystemAccountStoreAdapter.m#L96 - there are 13 occurances) might be wise to avoid that.
+		
+		SLRequest *request = [SLRequest requestForServiceType:SLServiceTypeFacebook requestMethod:SLRequestMethodGET URL:[NSURL URLWithString:@"https://graph.facebook.com/me"] parameters:nil];
+		request.account = account;
+				
+		[request performRequestWithHandler:^(NSData *responseData, NSHTTPURLResponse *urlResponse, NSError *error) {
+			
+			NSDictionary *query = SAQueryParameters(request.preparedURLRequest.URL.query);
+			NSString *token = query[@"access_token"];
+		
+			block(!!token, [NSDictionary dictionaryWithObjectsAndKeys:
+				token, SAFacebookAccessToken,
+			nil], token ? nil : [NSError errorWithDomain:SAErrorDomain code:SAErrorHaltAndCatchFire userInfo:@{
+				NSLocalizedDescriptionKey: @"Can’t Find Access Token",
+				NSLocalizedFailureReasonErrorKey: [NSString stringWithFormat:@"%@ can not extract access_token from the Graph API /me query any more. :( It is looking at a request %@ for account %@ with type %@.", NSStringFromClass([self class]), request, account, account.accountType.accountTypeDescription]
+			}]);
+			
+		}];
+		
+		return;
+		
+	}
+
+	block(NO, nil, [NSError errorWithDomain:SAErrorDomain code:SAErrorHaltAndCatchFire userInfo:@{
+		NSLocalizedDescriptionKey: @"Can’t Retrieve Credentials",
+		NSLocalizedFailureReasonErrorKey: [NSString stringWithFormat:@"%@ does not understand how to retrieve credentials for accounts of type %@.", NSStringFromClass([self class]), account.accountType.accountTypeDescription]
+	}]);
+	return;
+
+}
+
 @end
+
+NSString * const SATwitterConsumerKey = @"SATwitterConsumerKey";
+NSString * const SATwitterConsumerSecret = @"SATwitterConsumerSecret";
+
+NSString * const SAFacebookAccessToken = @"SAFacebookAccessToken";
+NSString * const SATwitterAccessToken = @"SATwitterAccessToken";
+NSString * const SATwitterAccessTokenSecret = @"SATwitterAccessTokenSecret";
