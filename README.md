@@ -6,6 +6,12 @@ Painless Facebook & Twitter auth on iOS 6+.
 
 Look at the [Sample App](https://github.com/evadne/SocialAuth-Sample). Check out the [Sample Video](http://vimeo.com/evadne/socialauth-debut). Try to break it.
 
+## Note
+
+SocialAuth uses [OAuthCore](https://github.com/evadne/OAuthCore) whose spec is not in the official Cocoapods repo yet. If you are using SocialAuth today, add evadne’s Specs repo:
+
+	$ pod repo add evadne git@github.com:evadne/Specs.git
+
 ## Use
 
 ### Authenticating
