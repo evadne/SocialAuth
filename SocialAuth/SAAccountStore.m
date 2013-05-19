@@ -61,10 +61,12 @@
 			composeViewController.view.alpha = 0;
 		};
 
+		[CATransaction begin];
 		[persistentViewController dismissViewControllerAnimated:NO completion:nil];
 		[persistentViewController presentViewController:composeViewController animated:NO completion:splunk];
 		[persistentViewController.view.window endEditing:NO];
 		splunk();
+		[CATransaction commit];
 		
 	};
 	
